@@ -16,6 +16,8 @@ class Export_To_Word {
         add_filter('the_content', array($this, 'add_export_button'));
         add_action('template_redirect', array($this, 'handle_export'));
         add_action('wp_enqueue_scripts', array($this, 'enqueue_scripts'));
+        add_action('admin_menu', array($this, 'add_admin_menu'));
+        add_action('admin_init', array($this, 'register_settings'));
     }
 
     public function add_export_button($content) {
@@ -85,8 +87,11 @@ class Export_To_Word {
         // Reset exporting flag
         $this->is_exporting = false;
 
-        // Remove "You may also be interested in these posts"
+        // Clean up the HTML
         $html = preg_replace('/<div class="rp4wp-related-posts">.*?<\/div>/s', '', $html);
+
+        // Ensure HTML is UTF-8 encoded for PHPWord
+        $html = mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8');
 
         // Allow developers to modify the HTML before export
         $html = apply_filters('etw_export_html', $html, $post);
@@ -95,8 +100,19 @@ class Export_To_Word {
 
         // Add footer
         $footer = $section->addFooter();
-        $footer_text = apply_filters('etw_export_footer_text', 'CAPS 123 | caps123.co.za');
+        $footer_text = get_option('etw_footer_text', 'CAPS 123 | caps123.co.za');
+        $footer_text = apply_filters('etw_export_footer_text', $footer_text);
         $footer->addText($footer_text, array('size' => 10));
+
+        // Clear any previous output buffers to avoid file corruption
+        if (ob_get_length()) {
+            ob_clean();
+        }
+
+        // Check if headers are already sent
+        if (headers_sent($file, $line)) {
+            throw new Exception(sprintf(__('Headers already sent in %s on line %d. Cannot download document.', 'export-to-word'), $file, $line));
+        }
 
         // Generate the Word document
         $writer = \PhpOffice\PhpWord\IOFactory::createWriter($phpWord, 'Word2007');
@@ -106,6 +122,7 @@ class Export_To_Word {
         header("Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         header("Content-Disposition: attachment; filename=\"$filename\"");
         header("Cache-Control: max-age=0");
+        header("Pragma: public");
 
         // Output the file
         $writer->save("php://output");
@@ -116,5 +133,53 @@ class Export_To_Word {
         if (is_single()) {
             wp_enqueue_style('export-to-word-style', ETW_PLUGIN_URL . 'css/export-to-word.css', array(), ETW_VERSION);
         }
+    }
+
+    public function add_admin_menu() {
+        add_options_page(
+            __('Export to Word Settings', 'export-to-word'),
+            __('Export to Word', 'export-to-word'),
+            'manage_options',
+            'export-to-word',
+            array($this, 'settings_page')
+        );
+    }
+
+    public function register_settings() {
+        register_setting('etw_settings_group', 'etw_footer_text');
+        add_settings_section(
+            'etw_main_section',
+            __('Main Settings', 'export-to-word'),
+            null,
+            'export-to-word'
+        );
+        add_settings_field(
+            'etw_footer_text',
+            __('Footer Text', 'export-to-word'),
+            array($this, 'footer_text_callback'),
+            'export-to-word',
+            'etw_main_section'
+        );
+    }
+
+    public function footer_text_callback() {
+        $footer_text = get_option('etw_footer_text', 'CAPS 123 | caps123.co.za');
+        echo '<input type="text" name="etw_footer_text" value="' . esc_attr($footer_text) . '" class="regular-text">';
+        echo '<p class="description">' . __('This text will appear in the footer of the exported Word document.', 'export-to-word') . '</p>';
+    }
+
+    public function settings_page() {
+        ?>
+        <div class="wrap">
+            <h1><?php _e('Export to Word Settings', 'export-to-word'); ?></h1>
+            <form method="post" action="options.php">
+                <?php
+                settings_fields('etw_settings_group');
+                do_settings_sections('export-to-word');
+                submit_button();
+                ?>
+            </form>
+        </div>
+        <?php
     }
 }
