@@ -40,7 +40,7 @@ class Export_To_Word {
     }
 
     public function handle_export() {
-        if (isset($_POST['etw_export']) && isset($_POST['etw_nonce'])) {
+        if (isset($_POST['etw_export']) && isset($_POST['etw_nonce']) && is_single()) {
             if (!wp_verify_nonce($_POST['etw_nonce'], 'etw_export_nonce')) {
                 wp_die(__('Security check failed', 'export-to-word'));
             }
@@ -50,6 +50,11 @@ class Export_To_Word {
             }
 
             $post_id = get_the_ID();
+            if (!$post_id) {
+                global $post;
+                $post_id = isset($post->ID) ? $post->ID : 0;
+            }
+
             if (!$post_id) {
                 wp_die(__('Invalid post ID', 'export-to-word'));
             }
@@ -115,17 +120,31 @@ class Export_To_Word {
         }
 
         // Generate the Word document
-        $writer = \PhpOffice\PhpWord\IOFactory::createWriter($phpWord, 'Word2007');
+        try {
+            $writer = \PhpOffice\PhpWord\IOFactory::createWriter($phpWord, 'Word2007');
+        } catch (Exception $e) {
+            throw new Exception(sprintf(__('Failed to create Word writer: %s', 'export-to-word'), $e->getMessage()));
+        }
 
         // Set the appropriate headers for download
         $filename = sanitize_file_name($post->post_title) . '.docx';
+        if (empty($filename)) {
+            $filename = 'post-' . $post_id . '.docx';
+        }
         header("Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         header("Content-Disposition: attachment; filename=\"$filename\"");
         header("Cache-Control: max-age=0");
         header("Pragma: public");
 
         // Output the file
-        $writer->save("php://output");
+        try {
+            $writer->save("php://output");
+        } catch (Exception $e) {
+            // Since we've already sent headers, we can't wp_die gracefully here with a pretty page,
+            // but we can try to log it or at least terminate.
+            error_log(sprintf('Export to Word failed during save: %s', $e->getMessage()));
+            exit;
+        }
         exit;
     }
 
